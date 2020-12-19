@@ -69,16 +69,18 @@ setupDestination:
 		}
 	})
 	chk(err)
-	chk(stream.Start())   //initialize audio stream
-	go readCharMessages() //initialize text "stream" on new thread (not sure if thread or just async but ¯\_(ツ)_/¯)
+	chk(stream.Start()) //initialize audio stream
+	//go readCharMessages() //initialize text "stream" on new thread (not sure if thread or just async but ¯\_(ツ)_/¯)
 	var consoleEntrance string
 askstop:
 	fmt.Println("Enter chat messages in the console, enter \"/Stop\" to close")
 	fmt.Scanln(&consoleEntrance)
 	if strings.ToLower(consoleEntrance) == "/stop" {
-	}
-	if strings.HasPrefix(strings.ToLower(consoleEntrance), "/name") {
-		http.PostForm(dest+"/setname", url.Values{"name": {strings.Split(consoleEntrance, "/name")[0]}})
+
+	} else if strings.HasPrefix(strings.ToLower(consoleEntrance), "/name") {
+		name := strings.Split(consoleEntrance, "/name")[1]
+		http.PostForm(dest+"/setname", url.Values{"name": {name}})
+		goto askstop
 	} else {
 		fmt.Println("Sending Message")
 		data := url.Values{"message": {consoleEntrance}}
