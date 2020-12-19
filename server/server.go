@@ -4,12 +4,11 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/gordonklaus/portaudio"
-
-	//"github.com/gordonklaus/portaudio"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 )
 
 const sampleRate = 44100
@@ -22,6 +21,7 @@ type user struct {
 }
 
 var users map[string]user
+var usersWriteLock sync.Mutex
 
 type messageAndId struct {
 	id  int
@@ -59,12 +59,14 @@ func main() {
 			panic("expected http.ResponseWriter to be an http.Flusher")
 		}
 		userData, exists := users[r.RemoteAddr]
+		usersWriteLock.Lock()
 		if exists {
 			userData.audioWriter = w
 			users[r.RemoteAddr] = userData
 		} else {
 			users[r.RemoteAddr] = user{r.RemoteAddr, nil, w, make([]int, 0)}
 		}
+		usersWriteLock.Unlock()
 		w.Header().Set("Connection", "Keep-Alive")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -81,44 +83,52 @@ func main() {
 	})
 	http.HandleFunc("/chatin", func(writer http.ResponseWriter, request *http.Request) {
 		userData, exists := users[request.RemoteAddr]
+		usersWriteLock.Lock()
 		if exists {
 			userData.audioWriter = writer
 			users[request.RemoteAddr] = userData
 		} else {
 			users[request.RemoteAddr] = user{request.RemoteAddr, nil, nil, make([]int, 0)}
 		}
+		usersWriteLock.Unlock()
 		request.ParseForm()
 		sendmsg(request.Form["message"][0], users[request.RemoteAddr])
 		defer request.Body.Close()
 	})
 	http.HandleFunc("/chatout", func(writer http.ResponseWriter, request *http.Request) {
 		userData, exists := users[request.RemoteAddr]
+		usersWriteLock.Lock()
 		if exists {
 			userData.chatWriter = writer
 			users[request.RemoteAddr] = userData
 		} else {
 			users[request.RemoteAddr] = user{request.RemoteAddr, writer, nil, make([]int, 0)}
 		}
+		usersWriteLock.Unlock()
 		user := users[request.RemoteAddr]
 		for _, msg := range messages {
 			if contains(msg.id, user.idsSent) {
 				continue
 			}
-			binary.Write(writer, binary.BigEndian, msg)
-			fmt.Println("Message sent")
+			binary.Write(writer, binary.BigEndian, msg.msg)
+			//fmt.Println("Message sent")
 			user.idsSent = append(users[request.RemoteAddr].idsSent, msg.id)
 		}
+		usersWriteLock.Lock()
 		users[request.RemoteAddr] = user
+		usersWriteLock.Unlock()
 	})
 	http.HandleFunc("/setname", func(writer http.ResponseWriter, request *http.Request) {
 		request.ParseForm()
 		userData, exists := users[request.RemoteAddr]
+		usersWriteLock.Lock()
 		if exists {
 			userData.name = request.Form["name"][0]
 			users[request.RemoteAddr] = userData
 		} else {
 			users[request.RemoteAddr] = user{request.Form["name"][0], nil, nil, make([]int, 0)}
 		}
+		usersWriteLock.Unlock()
 	})
 	fmt.Println("Server Created")
 	log.Fatal(http.ListenAndServe(":8080", nil))
