@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/gordonklaus/portaudio"
+
 	//"github.com/gordonklaus/portaudio"
 	"log"
 	"net/http"
@@ -13,16 +15,25 @@ import (
 const sampleRate = 44100
 
 type user struct {
-	name string
-	chatWriter http.ResponseWriter
+	name        string
+	chatWriter  http.ResponseWriter
 	audioWriter http.ResponseWriter
+	idsSent     []int
 }
 
 var users map[string]user
 
+type messageAndId struct {
+	id  int
+	msg string
+}
+
+var id int = 0
+var messages []messageAndId
+
 func main() {
-	//portaudio.Initialize()
-	//defer portaudio.Terminate()
+	portaudio.Initialize()
+	defer portaudio.Terminate()
 	users = map[string]user{}
 	var bufLen string
 	if len(os.Args) < 2 {
@@ -32,15 +43,15 @@ func main() {
 		bufLen = os.Args[1]
 	}
 	var seconds, _ = strconv.ParseFloat(bufLen, 64)
-	buffer := make([]float32, int64(sampleRate * seconds))
-	//stream, err := portaudio.OpenDefaultStream(1, 0, sampleRate, len(buffer), func(in []float32) {
-	//	for i := range buffer {
-	//		buffer[i] = in[i]
-	//	}
-	//})
-	//chk(err)
-	//chk(stream.Start())
-	//defer stream.Close()
+	buffer := make([]float32, int64(sampleRate*seconds))
+	stream, err := portaudio.OpenDefaultStream(1, 0, sampleRate, len(buffer), func(in []float32) {
+		for i := range buffer {
+			buffer[i] = in[i]
+		}
+	})
+	chk(err)
+	chk(stream.Start())
+	defer stream.Close()
 
 	http.HandleFunc("/audio", func(w http.ResponseWriter, r *http.Request) {
 		flusher, ok := w.(http.Flusher)
@@ -52,7 +63,7 @@ func main() {
 			userData.audioWriter = w
 			users[r.RemoteAddr] = userData
 		} else {
-			users[r.RemoteAddr] = user{r.RemoteAddr, nil, w}
+			users[r.RemoteAddr] = user{r.RemoteAddr, nil, w, make([]int, 0)}
 		}
 		w.Header().Set("Connection", "Keep-Alive")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -74,11 +85,9 @@ func main() {
 			userData.audioWriter = writer
 			users[request.RemoteAddr] = userData
 		} else {
-			users[request.RemoteAddr] = user{request.RemoteAddr, writer, nil}
+			users[request.RemoteAddr] = user{request.RemoteAddr, nil, nil, make([]int, 0)}
 		}
-		fmt.Println("recieved post")
 		request.ParseForm()
-		fmt.Println(request.Body)
 		sendmsg(request.Form["message"][0], users[request.RemoteAddr])
 		defer request.Body.Close()
 	})
@@ -88,20 +97,50 @@ func main() {
 			userData.chatWriter = writer
 			users[request.RemoteAddr] = userData
 		} else {
-			users[request.RemoteAddr] = user{request.RemoteAddr, writer, nil}
+			users[request.RemoteAddr] = user{request.RemoteAddr, writer, nil, make([]int, 0)}
+		}
+		user := users[request.RemoteAddr]
+		for _, msg := range messages {
+			if contains(msg.id, user.idsSent) {
+				continue
+			}
+			binary.Write(writer, binary.BigEndian, msg)
+			fmt.Println("Message sent")
+			user.idsSent = append(users[request.RemoteAddr].idsSent, msg.id)
+		}
+		users[request.RemoteAddr] = user
+	})
+	http.HandleFunc("/setname", func(writer http.ResponseWriter, request *http.Request) {
+		request.ParseForm()
+		userData, exists := users[request.RemoteAddr]
+		if exists {
+			userData.name = request.Form["name"][0]
+			users[request.RemoteAddr] = userData
+		} else {
+			users[request.RemoteAddr] = user{request.Form["name"][0], nil, nil, make([]int, 0)}
 		}
 	})
 	fmt.Println("Server Created")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func sendmsg(msg string, sourceUser user){
+func sendmsg(msg string, sourceUser user) {
 	msg = sourceUser.name + ": " + msg
 	fmt.Println(msg)
-	for _, destUser := range users {
-		if destUser == sourceUser {continue}
-		binary.Write(destUser.chatWriter, binary.BigEndian, msg)
+	//for _, destUser := range users {
+	//	if destUser == sourceUser {continue}
+	//	binary.Write(destUser.chatWriter, binary.BigEndian, msg)
+	//}
+	messages = append(messages, messageAndId{id, msg})
+	id += 1
+}
+
+func contains(id int, ids []int) bool {
+	var doesContain = false
+	for idCheck := range ids {
+		doesContain = doesContain || id == idCheck
 	}
+	return doesContain
 }
 
 func chk(err error) {
